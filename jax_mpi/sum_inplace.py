@@ -1,3 +1,4 @@
+import ctypes
 
 from jax import core
 from jax.interpreters import xla
@@ -9,7 +10,7 @@ import jax
 import mpi4py.MPI as MPI
 
 
-def sum_inplace_jax(x):
+def sum_inplace_jax(x, comm):
     if not isinstance(x, jax.interpreters.xla.DeviceArray):
         raise TypeError("Argument to sum_inplace_jax must be a DeviceArray, got {}"
                         .format(type(x)))
@@ -17,41 +18,47 @@ def sum_inplace_jax(x):
     _x = jax.xla._force(x.block_until_ready())
     ptr = _x.device_buffer.unsafe_buffer_pointer()
 
+    # rebuild comm
+    _comm = MPI.Comm()
+    _comm_ptr = ctypes.c_void_p.from_address(MPI._addressof(_comm))
+    _comm_ptr.value = int(comm)
+
     # using native numpy because jax's numpy does not have ctypeslib
     data_pointer = _np.ctypeslib.ndpointer(x.dtype, shape=x.shape)
 
     # wrap jax data into a standard numpy array which is handled by MPI
     arr = data_pointer(ptr).contents
 
-    MPI.COMM_WORLD.Allreduce(MPI.IN_PLACE, arr, op=MPI.SUM)
+    _comm.Allreduce(MPI.IN_PLACE, arr, op=MPI.SUM)
 
     return _x
 
 
 _ops = xla_client.ops
 
-## The underlying jax primitive
+# The underlying jax primitive
 sum_inplace_p = core.Primitive("sum_inplace_mpi")  # Create the primitive
 
 
 # This function applies the primitive to a AST
-def sum_inplace_jax_primitive(x):
-    return sum_inplace_p.bind(x)
+def sum_inplace_jax_primitive(x, comm):
+    comm_ptr = _np.uint64(MPI._handleof(comm))
+    return sum_inplace_p.bind(x, comm=comm_ptr)
 
 
-#  this function executes the primitive, when not under any transformation
+# This function executes the primitive, when not under any transformation
 sum_inplace_p.def_impl(sum_inplace_jax)
 
 
 # This function evaluates only the shapes during AST construction
-def sum_inplace_abstract_eval(xs):
+def sum_inplace_abstract_eval(xs, comm):
     return abstract_arrays.ShapedArray(xs.shape, xs.dtype)
 
 
 sum_inplace_p.def_abstract_eval(sum_inplace_abstract_eval)
 
 
-# Herlper functions
+# Helper functions
 
 def _constant_s32_scalar(c, x):
     return _ops.Constant(c, _np.int32(x))
@@ -63,7 +70,7 @@ def _unpack_builder(c):
 
 
 #  This function compiles the operation
-def sum_inplace_xla_encode(c, x):
+def sum_inplace_xla_encode(c, x, comm):
     c = _unpack_builder(c)
     x_shape = c.GetShape(x)
     dtype = x_shape.element_type()
@@ -87,7 +94,11 @@ def sum_inplace_xla_encode(c, x):
     return _ops.CustomCall(
         c,
         kernel,
-        operands=(xla_client.ops.Constant(c, _np.int32(nitems)), x),
+        operands=(
+            xla_client.ops.Constant(c, _np.int32(nitems)),
+            x,
+            xla_client.ops.Constant(c, comm),
+        ),
         shape=xla_client.Shape.array_shape(dtype, dims),
     )
 

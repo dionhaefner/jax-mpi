@@ -11,17 +11,18 @@ import jax.numpy as np
 from jax_mpi.sum_inplace import sum_inplace_jax_primitive
 
 from mpi4py import MPI
-rank = MPI.COMM_WORLD.Get_rank()
-size = MPI.COMM_WORLD.Get_size()
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+size = comm.Get_size()
 
 
 def test_nojit(a):
-    return sum_inplace_jax_primitive(a)
+    return sum_inplace_jax_primitive(a, comm)
 
 
 @jax.jit
 def test_jit(a):
-    return sum_inplace_jax_primitive(a)
+    return sum_inplace_jax_primitive(a, comm)
 
 
 if __name__ == '__main__':
