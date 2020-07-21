@@ -1,2 +1,3 @@
 # jax-mpi
-Prototype of an MPI plugin for JAX (work in progress)
+
+Development continues here: [mpi4jax](https://github.com/PhilipVinc/mpi4jax)
